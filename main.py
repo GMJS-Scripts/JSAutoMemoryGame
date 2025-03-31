@@ -7,12 +7,14 @@ import time
 import threading
 import keyboard
 from PIL import ImageGrab, Image, ImageTk
+import os
 
 class MemoryGameBot:
     def __init__(self, root):
         self.root = root
         self.root.title("Bot Automático - Jogo da Memória")
         self.root.geometry("800x600")
+        self.root.attributes("-topmost", True)
         
         # Variáveis para áreas de jogo
         self.card_area = None
@@ -36,6 +38,9 @@ class MemoryGameBot:
         
         # Registrar tecla de parada
         keyboard.add_hotkey('f7', self.stop_bot)
+
+        if not os.path.exists("./capturedCards"):
+            os.makedirs("./capturedCards")
         
     def create_widgets(self):
         # Frame de controle
@@ -96,19 +101,21 @@ class MemoryGameBot:
         else:
             self.status_text.config(text="Falha ao selecionar área de referência!")
     
-    def select_area(self, area_type):
-        """Interface para seleção de área na tela"""
+    def select_area(self, area_type, center_size_percentage=0.1):
+        """Interface para seleção de área na tela com proporção fixa e área central ignorada."""
+
         # Instruções para o usuário
         if area_type == "cartas":
-            msg = "Selecione a área retangular que contém as cartas do jogo.\n\n" \
-                  "A área será ajustada para uma grade 4x4 perfeita."
+            msg = f"Selecione a área retangular que contém as cartas do jogo.\n\n" \
+                  f"A área central a ser ignorada será automaticamente definida como {center_size_percentage * 100}% do tamanho da carta."
         else:
-            msg = "Selecione a área retangular que contém as recompensas/referências do jogo.\n\n" \
-                  "A área será ajustada para uma grade 4x2 (4 em cima, 4 embaixo)."
-        
+            msg = "Selecione a área retangular que contém as recompensas/referências do jogo.\n\n"
+
         messagebox.showinfo("Seleção de Área", msg)
-        
+
         self.area_coords = []
+        self.ignore_center = False  # Indica se a área central deve ser ignorada
+        self.center_coords = None  # Coordenadas da área central ignorada
         self.selection_complete = False
         self.rect = None
 
@@ -118,7 +125,7 @@ class MemoryGameBot:
         self.selection_window.attributes("-alpha", 0.3)
         self.selection_canvas = Canvas(self.selection_window, bg="black")
         self.selection_canvas.pack(fill=tk.BOTH, expand=True)
-        
+
         # Texto de instrução na tela
         self.selection_canvas.create_text(
             self.selection_window.winfo_screenwidth() // 2,
@@ -130,13 +137,13 @@ class MemoryGameBot:
 
         # Grade de orientação (linhas verticais e horizontais)
         self.grid_lines = []
-        
+
         def start_selection(event):
             # Limpar linhas de grade anteriores
             for line in self.grid_lines:
                 self.selection_canvas.delete(line)
             self.grid_lines = []
-            
+
             self.area_coords = [event.x, event.y]
             if self.rect:
                 self.selection_canvas.delete(self.rect)
@@ -148,66 +155,32 @@ class MemoryGameBot:
         def update_selection(event):
             x1, y1 = self.area_coords
             x2, y2 = event.x, event.y
-            
+
             # Atualizar o retângulo
             self.selection_canvas.coords(self.rect, x1, y1, x2, y2)
-            
+
             # Limpar linhas de grade anteriores
             for line in self.grid_lines:
                 self.selection_canvas.delete(line)
             self.grid_lines = []
-            
-            # Desenhar linhas da grade interna (4x4 para cartas, 4x2 para recompensas)
-            if area_type == "cartas":
-                # Grade 4x4
-                for i in range(1, 4):
-                    # Linhas horizontais
-                    h_line = self.selection_canvas.create_line(
-                        x1, y1 + (y2 - y1) * i / 4,
-                        x2, y1 + (y2 - y1) * i / 4,
-                        fill="yellow", width=1, dash=(4, 4)
-                    )
-                    self.grid_lines.append(h_line)
-                    
-                    # Linhas verticais
-                    v_line = self.selection_canvas.create_line(
-                        x1 + (x2 - x1) * i / 4, y1,
-                        x1 + (x2 - x1) * i / 4, y2,
-                        fill="yellow", width=1, dash=(4, 4)
-                    )
-                    self.grid_lines.append(v_line)
-            else:
-                # Grade 4x2
-                # Linha horizontal do meio
-                h_line = self.selection_canvas.create_line(
-                    x1, y1 + (y2 - y1) / 2,
-                    x2, y1 + (y2 - y1) / 2,
-                    fill="yellow", width=1, dash=(4, 4)
-                )
-                self.grid_lines.append(h_line)
-                
-                # Linhas verticais (3 divisórias = 4 colunas)
-                for i in range(1, 4):
-                    v_line = self.selection_canvas.create_line(
-                        x1 + (x2 - x1) * i / 4, y1,
-                        x1 + (x2 - x1) * i / 4, y2,
-                        fill="yellow", width=1, dash=(4, 4)
-                    )
-                    self.grid_lines.append(v_line)
 
         def end_selection(event):
             x1, y1 = self.area_coords
             x2, y2 = event.x, event.y
-            
-            # Ajustar as coordenadas finais
+
+            # Garantir que x1 < x2 e y1 < y2
             if x2 < x1:
                 x2, x1 = x1, x2
             if y2 < y1:
                 y2, y1 = y1, y2
-            
+
             self.area_coords = [x1, y1, x2, y2]
             self.selection_complete = True
             self.selection_window.destroy()
+
+            # Se for a área de cartas, definir a área central ignorada automaticamente
+            if area_type == "cartas":
+                self.calculate_center_area(center_size_percentage)
 
         self.selection_canvas.bind("<ButtonPress-1>", start_selection)
         self.selection_canvas.bind("<B1-Motion>", update_selection)
@@ -221,9 +194,7 @@ class MemoryGameBot:
 
         # Retorna as coordenadas se a seleção foi concluída
         if self.selection_complete and len(self.area_coords) == 4:
-            # Garantir que x1 < x2 e y1 < y2
-            x1, y1, x2, y2 = self.area_coords
-            return (x1, y1, x2, y2)
+            return tuple(self.area_coords)
         else:
             return None
     
@@ -445,16 +416,21 @@ class MemoryGameBot:
         self.log_text.see(tk.END)
     
     def capture_card_image(self, position):
-        """Captura a imagem de uma carta na posição específica"""
+        """Captura a imagem de uma carta na posição específica e salva em arquivo."""
         if position >= len(self.grid_positions):
             return None
         
         _, _, x, y, width, height = self.grid_positions[position]
         screenshot = ImageGrab.grab(bbox=(x, y, x + width, y + height))
-        return np.array(screenshot)
+        img_array = np.array(screenshot)
+        
+        # Salvar a imagem em um arquivo
+        cv2.imwrite(os.path.join("./capturedCards", f"card_{position}.png"), cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+        
+        return img_array
     
-    def compare_images(self, img1, img2):
-        """Compara duas imagens para verificar se são a mesma carta"""
+    def compare_images(self, img1, img2, basePos, comparePos):
+        """Compara duas imagens para verificar se são a mesma carta."""
         if img1 is None or img2 is None:
             return False
         
@@ -470,17 +446,29 @@ class MemoryGameBot:
         similarity = cv2.matchTemplate(img1_gray, img2_gray, cv2.TM_CCOEFF_NORMED)
         max_similarity = np.max(similarity)
         
+        # log
+        self.log(f"similarity na carta {basePos} - {comparePos} :({max_similarity})")
+
         # Considerar igual se a similaridade for maior que 0.85 (valor ajustado)
         return max_similarity > 0.85
     
     def click_card(self, position):
-        """Clica em uma carta na posição especificada"""
+        """Clica em uma carta na posição especificada e move o mouse."""
         if position >= len(self.grid_positions):
             return
         
         x, y, _, _, _, _ = self.grid_positions[position]
         self.log(f"Clicando na carta {position} (x={x}, y={y})")
         pyautogui.click(x, y)
+        
+        # Mover o mouse para fora da área das cartas
+        self.move_mouse_away()
+
+    def move_mouse_away(self):
+        """Move o mouse para uma posição fora da área das cartas."""
+        x = 100
+        y = 100
+        pyautogui.moveTo(x, y)    
     
     def run_bot(self):
         """Lógica principal do bot"""
@@ -533,7 +521,7 @@ class MemoryGameBot:
             
             for pos, img in self.card_images.items():
                 if pos != first_card_pos and pos not in self.matched_cards:
-                    if self.compare_images(first_card_image, img):
+                    if self.compare_images(first_card_image, img, first_card_pos, pos):
                         found_match = True
                         match_pos = pos
                         
@@ -564,7 +552,7 @@ class MemoryGameBot:
                     self.card_images[second_card_pos] = second_card_image
                     
                     # Verificar se formam um par
-                    if self.compare_images(first_card_image, second_card_image):
+                    if self.compare_images(first_card_image, second_card_image, first_card_pos, second_card_pos):
                         self.log(f"Par encontrado: cartas {first_card_pos} e {second_card_pos}")
                         
                         # Registrar o par identificado
@@ -578,7 +566,7 @@ class MemoryGameBot:
                         # Verificar se a segunda carta forma par com alguma carta já conhecida
                         for pos, img in self.card_images.items():
                             if pos != second_card_pos and pos not in self.matched_cards:
-                                if self.compare_images(second_card_image, img):
+                                if self.compare_images(second_card_image, img, second_card_pos, pos):
                                     self.log(f"Identificado par para a carta {second_card_pos}: carta {pos}")
                                     
                                     # Registrar o par identificado
